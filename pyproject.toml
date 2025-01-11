@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "py2anki"
+version = "0.1.0"
+description = "Tool for translating codebases into Anki cards"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic",
+]
+
+
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I001"]
+ignore = ["E721", "E731", "F722"]
+
+[tool.mypy]
+python_version = "3.12"
+disallow_untyped_defs = true
+check_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+no_implicit_optional = true
+strict_optional = true
