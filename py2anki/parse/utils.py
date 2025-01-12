@@ -1,4 +1,7 @@
-def remove_extra_indentation(text: str) -> str:
+from typing import List
+
+
+def remove_extra_indentation(lines: List[str]) -> str:
     """
     Remove extra indentation from the text.
 
@@ -8,10 +11,10 @@ def remove_extra_indentation(text: str) -> str:
     Returns:
         The text with extra indentation removed.
     """
-    lines = text.splitlines()
-    if not lines:
-        return text
-    indent = len(lines[0]) - len(lines[0].lstrip())
+    if lines:
+        indent = len(lines[0]) - len(lines[0].lstrip())
+    else:
+        indent = 0
     return "\n".join(line[indent:] for line in lines)
 
 

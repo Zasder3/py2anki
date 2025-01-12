@@ -1,11 +1,24 @@
 class Foo:
+    name: str
+
     def __init__(self, name: str):
         self.name = name
     
     def say_hello(self) -> str:
-        return f"Hello, {self.name}"
+        def _private():
+            return "Hello"
+        return f"{_private()}, {self.name}"
 
 def bar(x: int) -> int:
+    """
+    Perform the Collatz conjecture on the input number x.
+
+    Parameters:
+        x: The input number
+    
+    Returns:
+        The number of steps it took to reach 1
+    """
     i = 0
     while x != 1:
         i += 1
