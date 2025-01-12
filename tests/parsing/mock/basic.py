@@ -5,7 +5,7 @@ class Foo:
         self.name = name
     
     def say_hello(self) -> str:
-        def _private():
+        def _private() -> str:
             return "Hello"
         return f"{_private()}, {self.name}"
 

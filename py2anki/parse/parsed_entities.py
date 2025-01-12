@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Type
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -16,8 +16,9 @@ class ParsedCodeEntity(BaseModel):  # Base class
 
     @field_validator('dependencies')
     @classmethod
-    def ensure_unique(cls, v):
+    def ensure_unique(cls: Type['ParsedCodeEntity'], v: List[str]) -> List[str]:
         return list(dict.fromkeys(v))
+
 
 class ParsedFunction(ParsedCodeEntity):
     name: str = Field(description="Function name")
@@ -33,7 +34,6 @@ class ParsedClass(ParsedCodeEntity):
         default_factory=list,
         description="List of parent classes"
     )
-
 
 
 class ParsedFile(ParsedCodeEntity):

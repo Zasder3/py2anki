@@ -1,4 +1,5 @@
-from typing import List
+import ast
+from typing import List, Union
 
 
 def remove_extra_indentation(lines: List[str]) -> str:
@@ -18,7 +19,10 @@ def remove_extra_indentation(lines: List[str]) -> str:
     return "\n".join(line[indent:] for line in lines)
 
 
-def get_source_code(node, source_code: str) -> str:
+def get_source_code(
+        node: Union[ast.FunctionDef, ast.ClassDef],
+        source_code: str
+) -> str:
     """
     Get the source code of the node.
 

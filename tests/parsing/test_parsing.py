@@ -1,25 +1,25 @@
 import pytest
 
-from py2anki.parse import parse_file
+from py2anki.parse import ParsedFile, parse_file
 
 
 @pytest.fixture
-def parsed_file():
+def parsed_file() -> ParsedFile:
     return parse_file("tests/parsing/mock/basic.py")
 
 
-def test_file_metadata(parsed_file):
+def test_file_metadata(parsed_file: ParsedFile) -> None:
     assert parsed_file.path == "tests/parsing/mock/basic.py"
     with open(parsed_file.path) as f:
         assert parsed_file.source_code == f.read()
 
-def test_file_content_counts(parsed_file):
+def test_file_content_counts(parsed_file: ParsedFile) -> None:
     assert len(parsed_file.functions) == 1
     assert len(parsed_file.classes) == 1
     assert len(parsed_file.imports) == 0
     assert len(parsed_file.dependencies) == 0
 
-def test_function_parsing(parsed_file):
+def test_function_parsing(parsed_file: ParsedFile) -> None:
     function = parsed_file.functions[0]
     
     assert function.name == "bar"
@@ -50,7 +50,7 @@ Returns:
     
     return i""".strip()
 
-def test_class_parsing(parsed_file):
+def test_class_parsing(parsed_file: ParsedFile) -> None:
     class_ = parsed_file.classes[0]
     
     assert class_.name == "Foo"
@@ -62,7 +62,7 @@ def test_class_parsing(parsed_file):
         self.name = name
     
     def say_hello(self) -> str:
-        def _private():
+        def _private() -> str:
             return "Hello"
         return f"{_private()}, {self.name}\"""".strip()
     assert len(class_.methods) == 2
