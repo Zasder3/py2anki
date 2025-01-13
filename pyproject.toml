@@ -11,14 +11,11 @@ dependencies = [
     "anthropic",
 ]
 
-
-
 [tool.ruff]
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "I001"]
-ignore = ["E721", "E731", "F722"]
+select = ["E", "F", "I001", "W", "C90", "RUF"]
 
 [tool.mypy]
 python_version = "3.12"

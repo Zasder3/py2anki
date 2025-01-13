@@ -1,0 +1,14 @@
+setup.py
+exampleproject/__init__.py
+exampleproject/main.py
+exampleproject.egg-info/PKG-INFO
+exampleproject.egg-info/SOURCES.txt
+exampleproject.egg-info/dependency_links.txt
+exampleproject.egg-info/top_level.txt
+exampleproject/subpackage1/__init__.py
+exampleproject/subpackage1/foo.py
+exampleproject/subpackage2/__init__.py
+exampleproject/subpackage2/bar.py
+exampleproject/subpackage2/nested/__init__.py
+exampleproject/subpackage2/nested/extranested/__init__.py
+exampleproject/subpackage2/nested/extranested/deep.py
