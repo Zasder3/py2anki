@@ -1,4 +1,4 @@
-from typing import List, Optional, Type
+from typing import Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -49,4 +49,27 @@ class ParsedFile(ParsedCodeEntity):
     imports: List[ParsedFunction | ParsedClass] = Field(
         default_factory=list,
         description="List of imported functions or classes"
+    )
+
+class ParsedFolder(BaseModel):
+    path: str = Field(description="File path")
+    files: List['ParsedFile'] = Field(
+        default_factory=list,
+        description="List of files in the folder"
+    )
+    subfolders: List['ParsedFolder'] = Field(
+        default_factory=list,
+        description="List of subfolders"
+    )
+
+class ParsedProject(BaseModel):
+    path: str = Field(description="Project path")
+    package_name: str = Field(description="Package name")
+    root_folder: Optional[ParsedFolder] = Field(
+        default=None,
+        description="Root folder of the project"
+    )
+    aliases: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Dictionary of function and class aliases"
     )
