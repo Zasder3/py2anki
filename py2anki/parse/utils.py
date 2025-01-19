@@ -1,4 +1,6 @@
 import ast
+import sys
+from contextlib import ContextDecorator
 from typing import List, Union
 
 
@@ -36,3 +38,14 @@ def get_source_code(
     return remove_extra_indentation(
         source_code.split("\n")[node.lineno - 1 : node.end_lineno]
     )
+
+class ManagedModules(ContextDecorator):
+    def __enter__(self):
+        self.original_modules = sys.modules.copy()
+        self.original_path = sys.path.copy()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        # Restore original state
+        sys.modules.clear()
+        sys.modules.update(self.original_modules)
+        sys.path[:] = self.original_path

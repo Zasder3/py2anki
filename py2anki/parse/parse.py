@@ -4,25 +4,30 @@ import logging
 import os
 import sys
 from ast import NodeVisitor
+from typing import Dict, List, Optional
+
+from pydantic import BaseModel, Field
 
 from py2anki.parse.parsed_entities import (
     ParsedClass,
     ParsedFile,
     ParsedFolder,
     ParsedFunction,
-    ParsedProject,
 )
-from py2anki.parse.utils import get_source_code
+from py2anki.parse.utils import ManagedModules, get_source_code
 
+logger = logging.getLogger(__name__)
 
 class FileParser(NodeVisitor):
-    def __init__(self, path: str):
+    def __init__(self, path: str, project_root: str):
         with open(path, "r") as f:
             source_code = f.read()
         self.file = ParsedFile(
             path=path,
             source_code=source_code
         )
+        self.project_root = project_root
+        self.imports: List[str] = []
 
     def _get_attribute_string(self, node: ast.expr) -> str:
         if isinstance(node, ast.Name):
@@ -95,116 +100,175 @@ class FileParser(NodeVisitor):
             parent_classes=parent_classes
         ))
 
-def parse_file(path: str) -> ParsedFile:
-    parser = FileParser(path)
+    # import package.module.Class -> store string "package.module.Class"
+    # import notpackage.module.Class -> don't store anything
+    # import .module.Class -> find the root folder and store "package.module.Class"
+    # from package.module import Class -> store string "package.module.Class"
 
+    def _resolve_relative_import(self, relative_import: str, import_level: int) -> str:
+        # find the root folder and store "package.module.Class"
+        logger.debug(f"Starting with {self.file.path} and import level {import_level}")
+        rel_path_of_current_file = os.path.relpath(self.file.path, self.project_root)
+        logger.debug(f"Rel path of current file: {rel_path_of_current_file}")
+        for _ in range(import_level):
+            rel_path_of_current_file = os.path.dirname(rel_path_of_current_file)
+        logger.debug(f"Rel path of current file after {import_level} levels: {rel_path_of_current_file}")
+        rel_path_of_current_file = rel_path_of_current_file.replace(os.sep, ".")
+        return f"{rel_path_of_current_file}.{relative_import}"
+
+    def visit_Import(self, node: ast.Import) -> None:
+        logger.debug(f"Import: {node}")
+        for alias in node.names:
+            logger.debug(f"Alias: {alias.name}")
+            if import_level := getattr(node, "level", 0):
+                self.imports.append(
+                    self._resolve_relative_import(alias.name, import_level))
+                logger.debug(f"{self._resolve_relative_import(alias.name, import_level)}")
+            else:
+                self.imports.append(alias.name)
+                logger.debug(f"{alias.name}")
+        # dump the node
+        logger.debug(f"Node: {ast.dump(node)}")
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        logger.debug(f"ImportFrom: {node}")
+        if import_level := getattr(node, "level", 0):
+            prefix = self._resolve_relative_import(node.module, import_level)
+        else:
+            prefix = node.module
+        for alias in node.names:
+            self.imports.append(f"{prefix}.{alias.name}")
+            logger.debug(f"{prefix}.{alias.name}")
+        # dump the node
+        logger.debug(f"Node: {ast.dump(node)}")
+
+
+def parse_file(path: str, project_root: str) -> ParsedFile:
+    parser = FileParser(path, project_root)
     parser.visit(ast.parse(parser.file.source_code))
-
     return parser.file
 
-def parse_init(path: str, project: ParsedProject) -> None:
-    """
-    Parse all __init__.py by executing it and capturing its final state.
 
-    Arguments:
-        path: Path to the __init__.py file
-        project: Project context for adding aliases
+class ParsedProject(BaseModel):
+    path: str = Field(description="Project path")
+    package_name: str = Field(description="Package name")
+    root_folder: Optional[ParsedFolder] = Field(
+        default=None,
+        description="Root folder of the project"
+    )
+    aliases: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Dictionary of function and class aliases"
+    )
 
-    Returns:
-        None
-    """
-    # Create a controlled module environment
-    module_dir = os.path.dirname(path)
-    relative_path = os.path.relpath(module_dir, project.path)
-    package_parts = relative_path.split(os.sep)
+    def model_post_init(self, _) -> None:
+        self.parse_init()
+        self.root_folder = self.parse_folder(self.path)
 
-    # Create the full module name
-    module_name = f"{project.package_name}.{'.'.join(package_parts)}"
+    @ManagedModules()
+    def parse_init(self) -> None:
+        """
+        Parse all __init__.py by executing it and capturing its final state.
+        """
+        try:
+            # Add project root to path so imports work
+            project_root = os.path.dirname(self.path)
+            sys.path.insert(0, project_root)
 
-    # Store original state
-    original_modules = dict(sys.modules)
-    original_path = list(sys.path)
+            # Start with the root package
+            root_pkg = self.package_name
+            root_path = os.path.join(project_root, root_pkg)
 
-    try:
-        # Add project root to path so imports work
-        project_root = os.path.dirname(project.path)
-        sys.path.insert(0, project_root)
+            queue = [(root_path, root_pkg)]
 
-        # Set up parent packages in sys.modules
-        current_pkg = project.package_name
-        current_path = os.path.join(project_root, project.package_name)
+            while queue:
+                current_path, current_pkg = queue.pop(0)
+                init_path = os.path.join(current_path, "__init__.py")
 
-        # Initialize root package
-        spec = importlib.util.spec_from_file_location(
-            current_pkg,
-            os.path.join(current_path, "__init__.py")
-        )
-        if spec and spec.loader:
-            root_module = importlib.util.module_from_spec(spec)
-            sys.modules[current_pkg] = root_module
-            spec.loader.exec_module(root_module)
+                # If the __init__.py file exists, execute it and capture its final state
+                if os.path.exists(init_path):
+                    spec = importlib.util.spec_from_file_location(
+                        current_pkg, init_path)
+                    if spec and spec.loader:
+                        self.execute_and_capture(
+                            current_pkg,
+                            project_root,
+                            current_path,
+                            init_path,
+                            spec
+                        )
 
-        # Initialize each subpackage
-        for part in package_parts:
-            current_pkg = f"{current_pkg}.{part}"
-            current_path = os.path.join(current_path, part)
-            init_path = os.path.join(current_path, "__init__.py")
+                    # Add subfolders to the queue with their full package names
+                    for subfolder in os.listdir(current_path):
+                        subfolder_path = os.path.join(current_path, subfolder)
+                        if os.path.isdir(subfolder_path):
+                            subfolder_pkg = f"{current_pkg}.{subfolder}"
+                            queue.append((subfolder_path, subfolder_pkg))
 
-            if os.path.exists(init_path):
-                spec = importlib.util.spec_from_file_location(current_pkg, init_path)
-                if spec and spec.loader:
-                    module = importlib.util.module_from_spec(spec)
-                    sys.modules[current_pkg] = module
-                    spec.loader.exec_module(module)
+        except Exception as e:
+            logger.warning(f"Warning: Failed to execute {current_path}: {e}")
 
-        # Now load and execute the target module
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        if not spec or not spec.loader:
-            raise ImportError(f"Cannot load module at {path}")
+    def execute_and_capture(
+            self,
+            current_pkg: str,
+            project_root: str,
+            path: str,
+            init_path: str,
+            spec: importlib.machinery.ModuleSpec
+    ) -> None:
+        """
+        Execute an __init__.py file and capture its exported names.
+
+        Args:
+            current_pkg: The full package name (e.g. 'mypackage.submodule')
+            project_root: Root directory of the project
+            path: Current directory path
+            init_path: Path to the __init__.py file
+            spec: Module spec for importing
+        """
+        def _pkg_from_path(path: str) -> str:
+            rel_path = os.path.relpath(path, project_root)
+            return rel_path.replace(os.sep, '.')
 
         module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
+        sys.modules[current_pkg] = module
         spec.loader.exec_module(module)
+        logger.info(f"Executed {init_path}")
 
-        # Capture __all__ contents
         all_contents = getattr(module, '__all__', [])
-
-        # Map shortened names to full paths
         for name in all_contents:
             if item := getattr(module, name, None):
                 if module_name := getattr(item, '__module__', None):
-                    short_path = f"{relative_path.replace(os.sep, '.')}.{name}"
+                    short_path = f"{_pkg_from_path(path)}.{name}"
                     full_path = f"{module_name}.{name}"
-                    project.aliases[short_path] = full_path
-
-    except Exception as e:
-        logging.warning(f"Warning: Failed to execute {path}: {e}")
-
-    finally:
-        # Restore original state
-        sys.modules.clear()
-        sys.modules.update(original_modules)
-        sys.path[:] = original_path
-
-def parse_folder(path: str, project: ParsedProject):
-    folder = ParsedFolder(
-        path=path,
-    )
-    files = os.listdir(path)
-    # remove hidden files and pycache
-    files = filter(lambda x: not x.startswith("."), files)
-    files = filter(lambda x: not x.endswith(".pyc"), files)
-    for file in files:
-        if os.path.isfile(os.path.join(path, file)):
-            if file == "__init__.py":
-                parse_init(os.path.join(path, file), project)
+                    self.aliases[short_path] = full_path
+                    logger.debug(f"Added alias: {short_path} -> {full_path}")
+                else:
+                    logger.warning(
+                        f"Warning: {name} in {current_pkg} has no __module__ attribute")
             else:
-                parsed_file = parse_file(os.path.join(path, file))
-                folder.files.append(parsed_file)
-        elif os.path.isdir(os.path.join(path, file)):
-            parsed_sub_folder = parse_folder(os.path.join(path, file), project)
-            folder.subfolders.append(parsed_sub_folder)
-    return folder
+                logger.warning(
+                    f"Warning: {name} in {current_pkg} is not a valid module")
+
+    def parse_folder(self, path: str):
+        folder = ParsedFolder(
+            path=path,
+        )
+        files = os.listdir(path)
+        # remove hidden files and pycache
+        files = filter(lambda x: not x.startswith("."), files)
+        files = filter(lambda x: not x.endswith(".pyc"), files)
+        project_root = os.path.dirname(self.path)
+        for file in files:
+            if os.path.isfile(os.path.join(path, file)):
+                if file != "__init__.py":
+                    parsed_file = parse_file(os.path.join(path, file), project_root)
+                    folder.files.append(parsed_file)
+            elif os.path.isdir(os.path.join(path, file)):
+                parsed_sub_folder = self.parse_folder(os.path.join(path, file))
+                folder.subfolders.append(parsed_sub_folder)
+        return folder
+
 
 
 def parse_project(path: str, package_name: str) -> ParsedProject:
@@ -221,10 +285,15 @@ def parse_project(path: str, package_name: str) -> ParsedProject:
         path=path,
         package_name=package_name,
     )
-    project.root_folder = parse_folder(path, project)
     return project
 
 if __name__ == "__main__":
+    # Configure basic logging
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
     project = parse_project(
         "tests/parsing/mock/exampleproject/exampleproject", "exampleproject"
     )

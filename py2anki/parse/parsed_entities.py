@@ -1,7 +1,9 @@
-from typing import Dict, List, Optional, Type
+import logging
+from typing import List, Optional, Type
 
 from pydantic import BaseModel, Field, field_validator
 
+logger = logging.getLogger(__name__)
 
 class ParsedCodeEntity(BaseModel):  # Base class
     dependencies: List[str] = Field(
@@ -62,14 +64,3 @@ class ParsedFolder(BaseModel):
         description="List of subfolders"
     )
 
-class ParsedProject(BaseModel):
-    path: str = Field(description="Project path")
-    package_name: str = Field(description="Package name")
-    root_folder: Optional[ParsedFolder] = Field(
-        default=None,
-        description="Root folder of the project"
-    )
-    aliases: Dict[str, str] = Field(
-        default_factory=dict,
-        description="Dictionary of function and class aliases"
-    )
