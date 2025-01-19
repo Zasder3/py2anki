@@ -1,9 +1,9 @@
 import ast
 import importlib
+import logging
 import os
 import sys
 from ast import NodeVisitor
-from types import ModuleType
 
 from py2anki.parse.parsed_entities import (
     ParsedClass,
@@ -18,7 +18,6 @@ from py2anki.parse.utils import get_source_code
 class FileParser(NodeVisitor):
     def __init__(self, path: str):
         with open(path, "r") as f:
-            print(f"Parsing {path}")
             source_code = f.read()
         self.file = ParsedFile(
             path=path,
@@ -105,63 +104,81 @@ def parse_file(path: str) -> ParsedFile:
 
 def parse_init(path: str, project: ParsedProject) -> None:
     """
-    Parse __init__.py by executing it and capturing its final state.
+    Parse all __init__.py by executing it and capturing its final state.
 
-    Args:
+    Arguments:
         path: Path to the __init__.py file
         project: Project context for adding aliases
 
     Returns:
         None
     """
-    # At this point, future devlopers may ask: why didn't we just parse the file?
-    # The answer is that parsing the state of __init__.py is challenging, as it
-    # it might be updated with complex conditional logic, list operations, etc.
-    # Instead, we execute the file in a controlled environment capturing the end state.
-
     # Create a controlled module environment
-    mock_module = ModuleType('mock_module')
-    mock_module.__file__ = path
-    mock_module.__package__ = project.package_name
+    module_dir = os.path.dirname(path)
+    relative_path = os.path.relpath(module_dir, project.path)
+    package_parts = relative_path.split(os.sep)
+
+    # Create the full module name
+    module_name = f"{project.package_name}.{'.'.join(package_parts)}"
 
     # Store original state
     original_modules = dict(sys.modules)
     original_path = list(sys.path)
 
     try:
-        # Add parent directory to path so relative imports work
-        parent_dir = os.path.dirname(os.path.dirname(path))
-        sys.path.insert(0, parent_dir)
+        # Add project root to path so imports work
+        project_root = os.path.dirname(project.path)
+        sys.path.insert(0, project_root)
 
-        # Load and execute the module
-        spec = importlib.util.spec_from_file_location("mock_module", path)
+        # Set up parent packages in sys.modules
+        current_pkg = project.package_name
+        current_path = os.path.join(project_root, project.package_name)
+
+        # Initialize root package
+        spec = importlib.util.spec_from_file_location(
+            current_pkg,
+            os.path.join(current_path, "__init__.py")
+        )
+        if spec and spec.loader:
+            root_module = importlib.util.module_from_spec(spec)
+            sys.modules[current_pkg] = root_module
+            spec.loader.exec_module(root_module)
+
+        # Initialize each subpackage
+        for part in package_parts:
+            current_pkg = f"{current_pkg}.{part}"
+            current_path = os.path.join(current_path, part)
+            init_path = os.path.join(current_path, "__init__.py")
+
+            if os.path.exists(init_path):
+                spec = importlib.util.spec_from_file_location(current_pkg, init_path)
+                if spec and spec.loader:
+                    module = importlib.util.module_from_spec(spec)
+                    sys.modules[current_pkg] = module
+                    spec.loader.exec_module(module)
+
+        # Now load and execute the target module
+        spec = importlib.util.spec_from_file_location(module_name, path)
         if not spec or not spec.loader:
             raise ImportError(f"Cannot load module at {path}")
 
         module = importlib.util.module_from_spec(spec)
-        sys.modules['mock_module'] = module
+        sys.modules[module_name] = module
         spec.loader.exec_module(module)
 
         # Capture __all__ contents
         all_contents = getattr(module, '__all__', [])
 
         # Map shortened names to full paths
-        module_dir = os.path.dirname(path)
-        relative_path = os.path.relpath(module_dir, project.path)
-        package_prefix = relative_path.replace(os.sep, '.')
-
-        # Inspect module contents and create aliases
         for name in all_contents:
-            if hasattr(module, name):
-                item = getattr(module, name)
-                if hasattr(item, '__module__') and item.__module__:
-                    # Create alias: package.subpackage.name -> package.subpackage.module.name  # noqa: E501
-                    short_path = f"{package_prefix}.{name}" if package_prefix != '.' else name  # noqa: E501
-                    full_path = f"{item.__module__}.{name}"
+            if item := getattr(module, name, None):
+                if module_name := getattr(item, '__module__', None):
+                    short_path = f"{relative_path.replace(os.sep, '.')}.{name}"
+                    full_path = f"{module_name}.{name}"
                     project.aliases[short_path] = full_path
 
     except Exception as e:
-        print(f"Warning: Failed to execute {path}: {e}")
+        logging.warning(f"Warning: Failed to execute {path}: {e}")
 
     finally:
         # Restore original state
