@@ -2,12 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from py2anki.parse import ParsedFile, parse_file
+from py2anki.parse.parse import parse_file
+from py2anki.parse.parsed_entities import ParsedFile
 
 
 @pytest.fixture
 def dependency_file() -> ParsedFile:
-    return parse_file(str(Path(__file__).parent / "mock" / "dependency.py"))
+    root_path = Path(__file__).parent / "mock"
+    return parse_file(str(root_path / "dependency.py"), str(root_path))
 
 
 def test_base_function(dependency_file: ParsedFile):

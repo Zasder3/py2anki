@@ -2,12 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from py2anki.parse import ParsedFile, parse_file
+from py2anki.parse.parse import parse_file
+from py2anki.parse.parsed_entities import ParsedFile
 
 
 @pytest.fixture
 def parsed_file() -> ParsedFile:
-    return parse_file(str(Path(__file__).parent / "mock" / "basic.py"))
+    root_path = Path(__file__).parent / "mock"
+    return parse_file(str(root_path / "basic.py"), str(root_path))
 
 
 def test_file_metadata(parsed_file: ParsedFile) -> None:

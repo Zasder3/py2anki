@@ -107,40 +107,27 @@ class FileParser(NodeVisitor):
 
     def _resolve_relative_import(self, relative_import: str, import_level: int) -> str:
         # find the root folder and store "package.module.Class"
-        logger.debug(f"Starting with {self.file.path} and import level {import_level}")
         rel_path_of_current_file = os.path.relpath(self.file.path, self.project_root)
-        logger.debug(f"Rel path of current file: {rel_path_of_current_file}")
         for _ in range(import_level):
             rel_path_of_current_file = os.path.dirname(rel_path_of_current_file)
-        logger.debug(f"Rel path of current file after {import_level} levels: {rel_path_of_current_file}")
         rel_path_of_current_file = rel_path_of_current_file.replace(os.sep, ".")
         return f"{rel_path_of_current_file}.{relative_import}"
 
     def visit_Import(self, node: ast.Import) -> None:
-        logger.debug(f"Import: {node}")
         for alias in node.names:
-            logger.debug(f"Alias: {alias.name}")
             if import_level := getattr(node, "level", 0):
                 self.imports.append(
                     self._resolve_relative_import(alias.name, import_level))
-                logger.debug(f"{self._resolve_relative_import(alias.name, import_level)}")
             else:
                 self.imports.append(alias.name)
-                logger.debug(f"{alias.name}")
-        # dump the node
-        logger.debug(f"Node: {ast.dump(node)}")
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        logger.debug(f"ImportFrom: {node}")
         if import_level := getattr(node, "level", 0):
             prefix = self._resolve_relative_import(node.module, import_level)
         else:
             prefix = node.module
         for alias in node.names:
             self.imports.append(f"{prefix}.{alias.name}")
-            logger.debug(f"{prefix}.{alias.name}")
-        # dump the node
-        logger.debug(f"Node: {ast.dump(node)}")
 
 
 def parse_file(path: str, project_root: str) -> ParsedFile:
@@ -233,7 +220,6 @@ class ParsedProject(BaseModel):
         module = importlib.util.module_from_spec(spec)
         sys.modules[current_pkg] = module
         spec.loader.exec_module(module)
-        logger.info(f"Executed {init_path}")
 
         all_contents = getattr(module, '__all__', [])
         for name in all_contents:
@@ -242,7 +228,6 @@ class ParsedProject(BaseModel):
                     short_path = f"{_pkg_from_path(path)}.{name}"
                     full_path = f"{module_name}.{name}"
                     self.aliases[short_path] = full_path
-                    logger.debug(f"Added alias: {short_path} -> {full_path}")
                 else:
                     logger.warning(
                         f"Warning: {name} in {current_pkg} has no __module__ attribute")
@@ -258,6 +243,7 @@ class ParsedProject(BaseModel):
         # remove hidden files and pycache
         files = filter(lambda x: not x.startswith("."), files)
         files = filter(lambda x: not x.endswith(".pyc"), files)
+        files = filter(lambda x: not x.startswith("__"), files)
         project_root = os.path.dirname(self.path)
         for file in files:
             if os.path.isfile(os.path.join(path, file)):
@@ -269,24 +255,6 @@ class ParsedProject(BaseModel):
                 folder.subfolders.append(parsed_sub_folder)
         return folder
 
-
-
-def parse_project(path: str, package_name: str) -> ParsedProject:
-    """
-    Parse an entire python package from source directory.
-
-    Arguments:
-        path: location of the package
-        package_name: alias which the package uses (e.g. torch)
-    Returns:
-        A parsed structure of the project linking function dependencies.
-    """
-    project = ParsedProject(
-        path=path,
-        package_name=package_name,
-    )
-    return project
-
 if __name__ == "__main__":
     # Configure basic logging
     logging.basicConfig(
@@ -294,7 +262,8 @@ if __name__ == "__main__":
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
-    project = parse_project(
-        "tests/parsing/mock/exampleproject/exampleproject", "exampleproject"
+    project = ParsedProject(
+        path="tests/parsing/mock/exampleproject/exampleproject",
+        package_name="exampleproject"
     )
     print(project.aliases)
