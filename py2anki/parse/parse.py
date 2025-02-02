@@ -18,16 +18,67 @@ from py2anki.parse.utils import ManagedModules, get_source_code
 
 logger = logging.getLogger(__name__)
 
+
 class FileParser(NodeVisitor):
-    def __init__(self, path: str, project_root: str):
+    def __init__(self, path: str, project_root: str, package_name: str):
         with open(path, "r") as f:
             source_code = f.read()
-        self.file = ParsedFile(
-            path=path,
-            source_code=source_code
-        )
+        self.file = ParsedFile(path=path, source_code=source_code)
         self.project_root = project_root
         self.imports: List[str] = []
+        self.aliases: Dict[str, str] = {}
+        self.package_name = package_name
+
+    def resolve_imports(self) -> None:
+        """
+        For each function and class, resolve imports to their full paths. Then
+        remove any imports that are not in the aliases. Ending by adding the
+        imports to the file.
+        """
+        # Remove imports irrelevant to the package
+        self.imports = list(
+            filter(lambda x: x.startswith(self.package_name), self.imports)
+        )
+        self.aliases = {
+            k: v for k, v in self.aliases.items() if v.startswith(self.package_name)
+        }
+
+        for function in self.file.functions:
+            for i, import_str in enumerate(function.dependencies):
+                if import_str in self.aliases:
+                    function.dependencies[i] = self.aliases[import_str]
+        for class_ in self.file.classes:
+            for i, import_str in enumerate(class_.dependencies):
+                if import_str in self.aliases:
+                    class_.dependencies[i] = self.aliases[import_str]
+
+        # remove all dependencies that are not package imports or functions/classes
+        # defined in the file
+        defined_functions = {
+            function.name: function for function in self.file.functions
+        }
+        defined_classes = {class_.name: class_ for class_ in self.file.classes}
+        for function in self.file.functions:
+            function.dependencies = list(
+                filter(
+                    lambda x: x in self.imports
+                    or x in defined_functions
+                    or x in defined_classes,
+                    function.dependencies,
+                )
+            )
+        for class_ in self.file.classes:
+            class_.dependencies = list(
+                filter(
+                    lambda x: x in self.imports
+                    or x in defined_functions
+                    or x in defined_classes,
+                    class_.dependencies,
+                )
+            )
+
+        # add imports to the file
+        self.file.imports = self.imports
 
     def _get_attribute_string(self, node: ast.expr) -> str:
         if isinstance(node, ast.Name):
@@ -49,7 +100,7 @@ class FileParser(NodeVisitor):
             if isinstance(child, ast.FunctionDef):
                 local_functions.add(child.name)
             elif isinstance(child, ast.Call):
-                if hasattr(child.func, 'id') and child.func.id not in local_functions:
+                if hasattr(child.func, "id") and child.func.id not in local_functions:
                     function.dependencies.append(child.func.id)
                 elif isinstance(child.func, ast.Attribute):
                     function.dependencies.append(self._get_attribute_string(child.func))
@@ -91,14 +142,16 @@ class FileParser(NodeVisitor):
                 # Handle nested module access like a.b.ClassA
                 parent_classes.append(self._get_attribute_string(base))
 
-        self.file.classes.append(ParsedClass(
-            dependencies=dependencies,
-            name=node.name,
-            docstring=ast.get_docstring(node),
-            source_code=source_code,
-            methods=methods,
-            parent_classes=parent_classes
-        ))
+        self.file.classes.append(
+            ParsedClass(
+                dependencies=dependencies,
+                name=node.name,
+                docstring=ast.get_docstring(node),
+                source_code=source_code,
+                methods=methods,
+                parent_classes=parent_classes,
+            )
+        )
 
     # import package.module.Class -> store string "package.module.Class"
     # import notpackage.module.Class -> don't store anything
@@ -117,9 +170,12 @@ class FileParser(NodeVisitor):
         for alias in node.names:
             if import_level := getattr(node, "level", 0):
                 self.imports.append(
-                    self._resolve_relative_import(alias.name, import_level))
+                    self._resolve_relative_import(alias.name, import_level)
+                )
             else:
                 self.imports.append(alias.name)
+                if alias.asname is not None:
+                    self.aliases[alias.asname] = alias.name
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if import_level := getattr(node, "level", 0):
@@ -128,11 +184,16 @@ class FileParser(NodeVisitor):
             prefix = node.module
         for alias in node.names:
             self.imports.append(f"{prefix}.{alias.name}")
+            if alias.asname is not None:
+                self.aliases[alias.asname] = f"{prefix}.{alias.name}"
+            else:
+                self.aliases[alias.name] = f"{prefix}.{alias.name}"
 
 
-def parse_file(path: str, project_root: str) -> ParsedFile:
-    parser = FileParser(path, project_root)
+def parse_file(path: str, project_root: str, package_name: str) -> ParsedFile:
+    parser = FileParser(path, project_root, package_name)
     parser.visit(ast.parse(parser.file.source_code))
+    parser.resolve_imports()
     return parser.file
 
 
@@ -140,12 +201,10 @@ class ParsedProject(BaseModel):
     path: str = Field(description="Project path")
     package_name: str = Field(description="Package name")
     root_folder: Optional[ParsedFolder] = Field(
-        default=None,
-        description="Root folder of the project"
+        default=None, description="Root folder of the project"
     )
     aliases: Dict[str, str] = Field(
-        default_factory=dict,
-        description="Dictionary of function and class aliases"
+        default_factory=dict, description="Dictionary of function and class aliases"
     )
 
     def model_post_init(self, _) -> None:
@@ -175,14 +234,11 @@ class ParsedProject(BaseModel):
                 # If the __init__.py file exists, execute it and capture its final state
                 if os.path.exists(init_path):
                     spec = importlib.util.spec_from_file_location(
-                        current_pkg, init_path)
+                        current_pkg, init_path
+                    )
                     if spec and spec.loader:
                         self.execute_and_capture(
-                            current_pkg,
-                            project_root,
-                            current_path,
-                            init_path,
-                            spec
+                            current_pkg, project_root, current_path, init_path, spec
                         )
 
                     # Add subfolders to the queue with their full package names
@@ -196,12 +252,12 @@ class ParsedProject(BaseModel):
             logger.warning(f"Warning: Failed to execute {current_path}: {e}")
 
     def execute_and_capture(
-            self,
-            current_pkg: str,
-            project_root: str,
-            path: str,
-            init_path: str,
-            spec: importlib.machinery.ModuleSpec
+        self,
+        current_pkg: str,
+        project_root: str,
+        path: str,
+        init_path: str,
+        spec: importlib.machinery.ModuleSpec,
     ) -> None:
         """
         Execute an __init__.py file and capture its exported names.
@@ -213,27 +269,30 @@ class ParsedProject(BaseModel):
             init_path: Path to the __init__.py file
             spec: Module spec for importing
         """
+
         def _pkg_from_path(path: str) -> str:
             rel_path = os.path.relpath(path, project_root)
-            return rel_path.replace(os.sep, '.')
+            return rel_path.replace(os.sep, ".")
 
         module = importlib.util.module_from_spec(spec)
         sys.modules[current_pkg] = module
         spec.loader.exec_module(module)
 
-        all_contents = getattr(module, '__all__', [])
+        all_contents = getattr(module, "__all__", [])
         for name in all_contents:
             if item := getattr(module, name, None):
-                if module_name := getattr(item, '__module__', None):
+                if module_name := getattr(item, "__module__", None):
                     short_path = f"{_pkg_from_path(path)}.{name}"
                     full_path = f"{module_name}.{name}"
                     self.aliases[short_path] = full_path
                 else:
                     logger.warning(
-                        f"Warning: {name} in {current_pkg} has no __module__ attribute")
+                        f"Warning: {name} in {current_pkg} has no __module__ attribute"
+                    )
             else:
                 logger.warning(
-                    f"Warning: {name} in {current_pkg} is not a valid module")
+                    f"Warning: {name} in {current_pkg} is not a valid module"
+                )
 
     def parse_folder(self, path: str):
         folder = ParsedFolder(
@@ -248,22 +307,25 @@ class ParsedProject(BaseModel):
         for file in files:
             if os.path.isfile(os.path.join(path, file)):
                 if file != "__init__.py":
-                    parsed_file = parse_file(os.path.join(path, file), project_root)
+                    parsed_file = parse_file(
+                        os.path.join(path, file), project_root, self.package_name
+                    )
                     folder.files.append(parsed_file)
             elif os.path.isdir(os.path.join(path, file)):
                 parsed_sub_folder = self.parse_folder(os.path.join(path, file))
                 folder.subfolders.append(parsed_sub_folder)
         return folder
 
+
 if __name__ == "__main__":
     # Configure basic logging
     logging.basicConfig(
         level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
     project = ParsedProject(
         path="tests/parsing/mock/exampleproject/exampleproject",
-        package_name="exampleproject"
+        package_name="exampleproject",
     )
     print(project.aliases)

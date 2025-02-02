@@ -11,12 +11,16 @@ from py2anki.parse.parsed_entities import ParsedFolder
 def parsed_project() -> ParsedProject:
     return ParsedProject(
         path=str(Path(__file__).parent / "mock" / "exampleproject" / "exampleproject"),
-        package_name="exampleproject"
+        package_name="exampleproject",
     )
 
+
 def test_project_metadata(parsed_project: ParsedProject) -> None:
-    assert parsed_project.path == str(Path(__file__).parent / "mock" / "exampleproject" / "exampleproject")  # noqa: E501
+    assert parsed_project.path == str(
+        Path(__file__).parent / "mock" / "exampleproject" / "exampleproject"
+    )
     assert parsed_project.package_name == "exampleproject"
+
 
 def test_project_folders(parsed_project: ParsedProject) -> None:
     def _get_folder_subfolder(path: Path) -> ParsedFolder:
@@ -30,7 +34,9 @@ def test_project_folders(parsed_project: ParsedProject) -> None:
                     next_folder = subfolder
                     break
             if next_folder is None:
-                raise ValueError(f"Folder {addition} not found in {current_folder.path}")
+                raise ValueError(
+                    f"Folder {addition} not found in {current_folder.path}"
+                )
             current_folder = next_folder
             next_folder = None
         return current_folder
@@ -46,10 +52,18 @@ def test_project_folders(parsed_project: ParsedProject) -> None:
         folder = _get_folder_subfolder(Path(root))
         num_files = len(files) if "__init__.py" not in files else len(files) - 1
         num_subfolders = sum(
-            1 for subfolder in dirs
+            1
+            for subfolder in dirs
             if "__init__.py" in os.listdir(Path(root) / subfolder)
             and not subfolder.startswith("__")  # ignore __pycache__
-        ) # number of subpackages
+        )  # number of subpackages
         assert folder.path == str(Path(root))
         assert len(folder.files) == num_files
         assert len(folder.subfolders) == num_subfolders
+
+
+def test_project_dependencies(parsed_project: ParsedProject) -> None:
+    # exampleproject/main.py
+    main_file = parsed_project.root_folder.files[0]
+    print(main_file)
+    assert False
