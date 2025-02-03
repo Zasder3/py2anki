@@ -305,12 +305,6 @@ class ParsedProject(BaseModel):
     def add_file_to_references(self, file: ParsedFile, parsed_suffix: str) -> None:
         self.references[f"{self.package_name}.{parsed_suffix}"] = file
         for function in file.functions:
-            if function.name == "deepfn":
-                from devtools import pprint
-
-                pprint(function)
-                print(f"{self.package_name}.{parsed_suffix}.{function.name}")
-
             self.references[f"{self.package_name}.{parsed_suffix}.{function.name}"] = (
                 function
             )
@@ -336,12 +330,9 @@ class ParsedProject(BaseModel):
                         os.path.join(path, file), project_root, self.package_name
                     )
                     # Drop the prefix of the project root and the .py suffix
-                    print(parsed_file.path)
-                    print(project_root)
-                    print(parsed_file.path.replace(project_root, ""))
-                    parsed_suffix = parsed_file.path.replace(project_root, "").replace(
-                        "/", "."
-                    )[1:-3]
+                    parsed_suffix = parsed_file.path.replace(project_root, "")[1:-3]
+                    # Drop the folder name so that we may prefix with the package name
+                    parsed_suffix = ".".join(parsed_suffix.split("/")[1:])
                     self.add_file_to_references(parsed_file, parsed_suffix)
                     folder.files.append(parsed_file)
             elif os.path.isdir(os.path.join(path, file)):

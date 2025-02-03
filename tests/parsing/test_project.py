@@ -82,10 +82,11 @@ def test_project_file_dependencies(parsed_project: ParsedProject) -> None:
     )
     assert len(main_file.dependencies) == 1
     assert (
-        "exampleproject.subpackage2.nested.extranested.deepfn" in main_file.dependencies
+        "exampleproject.subpackage2.nested.extranested.deep.deepfn"
+        in main_file.dependencies
     )
     assert (
-        "exampleproject.subpackage2.nested.extranested.deepfn"
+        "exampleproject.subpackage2.nested.extranested.deep.deepfn"
         in main_file.functions[0].dependencies
     )
 
