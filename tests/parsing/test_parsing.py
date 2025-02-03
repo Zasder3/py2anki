@@ -21,7 +21,6 @@ def test_file_metadata(parsed_file: ParsedFile) -> None:
 def test_file_content_counts(parsed_file: ParsedFile) -> None:
     assert len(parsed_file.functions) == 1
     assert len(parsed_file.classes) == 1
-    assert len(parsed_file.imports) == 0
     assert len(parsed_file.dependencies) == 0
 
 
@@ -38,7 +37,7 @@ Parameters:
 
 Returns:
     The number of steps it took to reach 1"""
-    )  # noqa: E501
+    )
     assert (
         function.source_code.strip()
         == """def bar(x: int) -> int:
@@ -60,7 +59,7 @@ Returns:
             x = 3 * x + 1
     
     return i""".strip()
-    )  # noqa: W293
+    )
 
 
 def test_class_parsing(parsed_file: ParsedFile) -> None:
@@ -80,7 +79,7 @@ def test_class_parsing(parsed_file: ParsedFile) -> None:
         def _private() -> str:
             return "Hello"
         return f"{_private()}, {self.name}\"""".strip()
-    )  # noqa: W293
+    )
     assert len(class_.methods) == 2
     assert len(class_.parent_classes) == 0
     assert len(class_.dependencies) == 0

@@ -4,12 +4,13 @@ import logging
 import os
 import sys
 from ast import NodeVisitor
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 from py2anki.parse.parsed_entities import (
     ParsedClass,
+    ParsedCodeEntity,
     ParsedFile,
     ParsedFolder,
     ParsedFunction,
@@ -58,27 +59,26 @@ class FileParser(NodeVisitor):
             function.name: function for function in self.file.functions
         }
         defined_classes = {class_.name: class_ for class_ in self.file.classes}
-        for function in self.file.functions:
-            function.dependencies = list(
-                filter(
-                    lambda x: x in self.imports
-                    or x in defined_functions
-                    or x in defined_classes,
-                    function.dependencies,
-                )
-            )
-        for class_ in self.file.classes:
-            class_.dependencies = list(
-                filter(
-                    lambda x: x in self.imports
-                    or x in defined_functions
-                    or x in defined_classes,
-                    class_.dependencies,
-                )
-            )
 
-        # add imports to the file
-        self.file.imports = self.imports
+        def _filter_fn(x: str) -> bool:
+            return x in self.imports or x in defined_functions or x in defined_classes
+
+        for function in self.file.functions:
+            function.dependencies = list(filter(_filter_fn, function.dependencies))
+        for class_ in self.file.classes:
+            class_.dependencies = list(filter(_filter_fn, class_.dependencies))
+
+        # make the files dependencies the union of
+        # all the functions and classes dependencies
+        # Collect all dependencies from functions and classes
+        all_dependencies = []
+        for function in self.file.functions:
+            all_dependencies.extend(function.dependencies)
+        for class_ in self.file.classes:
+            all_dependencies.extend(class_.dependencies)
+
+        # Convert to set to remove duplicates and back to list
+        self.file.dependencies = list(set(all_dependencies))
 
     def _get_attribute_string(self, node: ast.expr) -> str:
         if isinstance(node, ast.Name):
@@ -141,6 +141,8 @@ class FileParser(NodeVisitor):
             elif isinstance(base, ast.Attribute):
                 # Handle nested module access like a.b.ClassA
                 parent_classes.append(self._get_attribute_string(base))
+        # add the parent classes to the dependencies
+        dependencies.extend(parent_classes)
 
         self.file.classes.append(
             ParsedClass(
@@ -206,10 +208,16 @@ class ParsedProject(BaseModel):
     aliases: Dict[str, str] = Field(
         default_factory=dict, description="Dictionary of function and class aliases"
     )
+    references: Dict[str, ParsedCodeEntity] = Field(
+        default_factory=dict,
+        description="Dictionary of function and class references",
+        exclude=True,
+    )
 
     def model_post_init(self, _) -> None:
         self.parse_init()
         self.root_folder = self.parse_folder(self.path)
+        self.resolve_project_aliases_and_references()
 
     @ManagedModules()
     def parse_init(self) -> None:
@@ -294,6 +302,23 @@ class ParsedProject(BaseModel):
                     f"Warning: {name} in {current_pkg} is not a valid module"
                 )
 
+    def add_file_to_references(self, file: ParsedFile, parsed_suffix: str) -> None:
+        self.references[f"{self.package_name}.{parsed_suffix}"] = file
+        for function in file.functions:
+            if function.name == "deepfn":
+                from devtools import pprint
+
+                pprint(function)
+                print(f"{self.package_name}.{parsed_suffix}.{function.name}")
+
+            self.references[f"{self.package_name}.{parsed_suffix}.{function.name}"] = (
+                function
+            )
+        for class_ in file.classes:
+            self.references[f"{self.package_name}.{parsed_suffix}.{class_.name}"] = (
+                class_
+            )
+
     def parse_folder(self, path: str):
         folder = ParsedFolder(
             path=path,
@@ -310,11 +335,53 @@ class ParsedProject(BaseModel):
                     parsed_file = parse_file(
                         os.path.join(path, file), project_root, self.package_name
                     )
+                    # Drop the prefix of the project root and the .py suffix
+                    print(parsed_file.path)
+                    print(project_root)
+                    print(parsed_file.path.replace(project_root, ""))
+                    parsed_suffix = parsed_file.path.replace(project_root, "").replace(
+                        "/", "."
+                    )[1:-3]
+                    self.add_file_to_references(parsed_file, parsed_suffix)
                     folder.files.append(parsed_file)
             elif os.path.isdir(os.path.join(path, file)):
                 parsed_sub_folder = self.parse_folder(os.path.join(path, file))
                 folder.subfolders.append(parsed_sub_folder)
         return folder
+
+    def resolve_project_aliases_and_references(self) -> None:
+        # starting at the root folder, resolve the aliases
+        def _walk_and_map(fn: Callable[[ParsedCodeEntity], None]) -> None:
+            queue = [self.root_folder]
+            while queue:
+                current_folder = queue.pop(0)
+                for file in current_folder.files:
+                    fn(file)
+                for subfolder in current_folder.subfolders:
+                    queue.append(subfolder)
+
+        _walk_and_map(self._resolve_file_aliases)
+        _walk_and_map(self._resolve_file_references)
+
+    def _resolve_file_aliases(self, file: ParsedFile) -> None:
+        def resolve_aliases(deps: List[str]) -> List[str]:
+            return [self.aliases.get(d, d) for d in deps]
+
+        for function in file.functions:
+            function.dependencies = resolve_aliases(function.dependencies)
+        for class_ in file.classes:
+            class_.dependencies = resolve_aliases(class_.dependencies)
+        file.dependencies = resolve_aliases(file.dependencies)
+
+    def _resolve_file_references(self, file: ParsedFile) -> None:
+        def resolve_refs(deps: List[str]) -> Dict[str, ParsedCodeEntity]:
+            return {d: self.references[d] for d in deps}
+
+        for function in file.functions:
+            function.dependency_refs = resolve_refs(function.dependencies)
+        for class_ in file.classes:
+            class_.dependency_refs = resolve_refs(class_.dependencies)
+        file.dependency_refs = resolve_refs(file.dependencies)
 
 
 if __name__ == "__main__":
